@@ -1,15 +1,23 @@
 import java.util.concurrent.atomic.AtomicInteger
 
 fun main(args: Array<String>) {
+    fun parse(str: String): Expr = LambdaCalculusParser.invoke(str)
     val id = Lambda(Var("x"), Var("x"))
-    assert(LambdaCalculusParser(id.prettyPrint()).equals(id))
+    assert(parse(id.pretty()).equals(id))
 
     val one = Lambda(Var("s"), Lambda(Var("z"), Apply(Var("s"), Var("z"))))
-    assert(LambdaCalculusParser(one.prettyPrint()).equals(one))
+    assert(parse(one.pretty()).equals(one))
 
-    println("token to string: " + one.prettyPrint())
-    println("string to token: " + LambdaCalculusParser("λs.(λz.(!s z))"))
-    println("with bindings: " + bind(LambdaCalculusParser("λx.(λx.(!x x))"), Scope.TOP).prettyPrint())
+    println("token to string: " + one.pretty())
+    println("string to token: " + parse("λs.(λz.(!s z))"))
+    // println("with bindings: " + bind(parse("λx.(λx.(!x x))"), Scope.TOP).pretty())
+    println("after evaluation: " + eval(bind(parse("!(λx.!(λy.(λx.y)) x) (λx.x)"), Scope.TOP), true).pretty())
+
+    // Ups… this should be left-associative
+    println("!a !b c: " + parse("!a !b c"))
+    println("!a (!b c): " + parse("!a (!b c)"))
+    println("expected to be false: " + parse("!a !b c").equals(parse("!a (!b c)")))
+    println("expected to be true: " + parse("!a !b c").equals(parse("!(!a b) c")))
 }
 
 sealed class Expr
@@ -44,13 +52,48 @@ fun bind(term: Expr, parent: Scope): Expr = when (term) {
     }
 }
 
-fun Expr.prettyPrint() = when (this) {
+fun eval(term: Expr, debug: Boolean = false): Expr {
+    fun Expr.isValue(): Boolean = when (this) {
+        is Lambda -> true
+        is Var -> true
+        is Apply -> false
+    }
+
+    fun evalStep(term: Expr): Expr = when {
+        term is Apply && term.fn is Lambda && term.arg.isValue() -> substitution(term.fn.arg, term.arg)(term.fn.body)
+        term is Apply && term.fn.isValue() -> Apply(term.fn, evalStep(term.arg))
+        term is Apply -> Apply(evalStep(term.fn), term.arg)
+        else -> throw NoWhenBranchMatchedException("non evaluable")
+    }
+
+    fun apply(term: Expr): Expr = try {
+        val step = evalStep(term)
+        if (debug) println("step: ${term.pretty()}  → ${step.pretty()}")
+        apply(step)
+    } catch (e: NoWhenBranchMatchedException) {
+        term;
+    }
+    return apply(term)
+}
+
+fun substitution(argV: Var, replacement: Expr): (term: Expr) -> Expr {
+    fun apply(it: Expr): Expr = when {
+        it is Var && it.name == argV.name && it.scope == argV.scope -> bind(replacement, argV.scope.parent!!)
+        it is Var -> it
+        it is Apply -> Apply(apply(it.fn), apply(it.arg))
+        it is Lambda -> Lambda(it.arg, apply(it.body))
+        else -> throw NoWhenBranchMatchedException("non substitutable")
+    }
+    return { apply(it) }
+}
+
+fun Expr.pretty() = when (this) {
     is Lambda -> "λ${parentIfNeeded(arg)}.${parentIfNeeded(body)}"
     is Apply -> "!${parentIfNeeded(fn)} ${parentIfNeeded(arg)}"
     is Var -> name + scope.id
 }
 
-fun parentIfNeeded(expr: Expr): String = (expr as? Var)?.prettyPrint() ?: "(${expr.prettyPrint()})"
+fun parentIfNeeded(expr: Expr): String = (expr as? Var)?.pretty() ?: "(${expr.pretty()})"
 
 /**
  * ```
