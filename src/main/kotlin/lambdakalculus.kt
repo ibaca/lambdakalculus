@@ -1,3 +1,5 @@
+import java.util.concurrent.atomic.AtomicInteger
+
 fun main(args: Array<String>) {
     val id = Lambda(Var("x"), Var("x"))
     assert(LambdaCalculusParser(id.prettyPrint()).equals(id))
@@ -7,20 +9,48 @@ fun main(args: Array<String>) {
 
     println("token to string: " + one.prettyPrint())
     println("string to token: " + LambdaCalculusParser("λs.(λz.(!s z))"))
+    println("with bindings: " + bind(LambdaCalculusParser("λx.(λx.(!x x))"), Scope.TOP).prettyPrint())
 }
 
 sealed class Expr
 data class Lambda(val arg: Var, val body: Expr) : Expr()
-data class Var(val name: String) : Expr()
+data class Var(val name: String, val scope: Scope = Scope.TOP) : Expr()
 data class Apply(val fn: Expr, val arg: Expr) : Expr()
+
+data class Scope(val parent: Scope?, val boundNames: Set<String>) {
+    val id = next.getAndIncrement()
+
+    fun closest(name: String): Scope? = when {
+        boundNames.contains(name) -> this
+        else -> parent?.closest(name)
+    }
+
+    companion object {
+        val next = AtomicInteger(0)
+        val TOP = Scope(null, emptySet())
+    }
+}
+
+fun bind(term: Expr, parent: Scope): Expr = when (term) {
+    is Lambda -> {
+        val scope = Scope(parent, setOf(term.arg.name))
+        Lambda(Var(term.arg.name, scope), bind(term.body, scope))
+    }
+    is Var -> {
+        Var(term.name, parent.closest(term.name) ?: throw Throwable("undefined variable ${term.name}"))
+    }
+    is Apply -> {
+        Apply(bind(term.fn, parent), bind(term.arg, parent))
+    }
+}
 
 fun Expr.prettyPrint() = when (this) {
     is Lambda -> "λ${parentIfNeeded(arg)}.${parentIfNeeded(body)}"
     is Apply -> "!${parentIfNeeded(fn)} ${parentIfNeeded(arg)}"
-    is Var -> name
+    is Var -> name + scope.id
 }
 
-fun parentIfNeeded(expr: Expr): String = (expr as? Var)?.name ?: "(${expr.prettyPrint()})"
+fun parentIfNeeded(expr: Expr): String = (expr as? Var)?.prettyPrint() ?: "(${expr.prettyPrint()})"
 
 /**
  * ```
@@ -34,7 +64,7 @@ fun parentIfNeeded(expr: Expr): String = (expr as? Var)?.name ?: "(${expr.pretty
  */
 object LambdaCalculusParser {
     val expr = Parser<String, Expr>()
-    val variable = repeat(string().word()).map("variable") { Var(it.toString()) }
+    val variable = repeat(string().word()).map("variable") { Var(it.joinToString("")) }
     val application = string().char('!').and(expr).zip({ string().ws().andR(expr) }, { v, w, r -> Success("application", Apply(v, w), r) })
     val lambda = (string().char('λ') and variable).zip({ string().char('.') and expr }, { v, w, r -> Success("lambda", Lambda(v, w), r) })
     val parentheses = expr.between(string().char('('), string().char(')'))
