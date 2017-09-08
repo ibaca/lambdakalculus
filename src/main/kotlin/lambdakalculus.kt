@@ -107,9 +107,9 @@ fun parentIfNeeded(expr: Expr): String = (expr as? Var)?.pretty() ?: "(${expr.pr
  */
 object LambdaCalculusParser {
     val expr = Parser<String, Expr>()
-    val variable = repeat(string().word()).map("variable") { Var(it.joinToString("")) }
-    val application = string().char('!').and(expr).zip({ string().ws().andR(expr) }, { v, w, r -> Success("application", Apply(v, w), r) })
-    val lambda = (string().char('λ') and variable).zip({ string().char('.') and expr }, { v, w, r -> Success("lambda", Lambda(v, w), r) })
+    val variable = repeat(string().word()).map { Var(it.joinToString("")) }
+    val application = string().char('!').and(expr).zip({ string().ws().andR(expr) }, { v, w, r -> Success(Apply(v, w), r) })
+    val lambda = (string().char('λ') and variable).zip({ string().char('.') and expr }, { v, w, r -> Success(Lambda(v, w), r) })
     val parentheses = expr.between(string().char('('), string().char(')'))
 
     init {
@@ -138,23 +138,23 @@ class Parser<T, V>() {
 }
 
 fun <T, V, W> Parser<T, V>.compose(fn: (Result<T, V>) -> (Result<T, W>)): Parser<T, W> = Parser { fn(this(it)) }
-fun <T, V, W> Parser<T, V>.map(msg: String, fn: (V) -> W): Parser<T, W> = compose { it.mapSuccess { (_, value, rest) -> Success(msg, fn(value), rest) } }
+fun <T, V, W> Parser<T, V>.map(fn: (V) -> W): Parser<T, W> = compose { it.mapSuccess { (value, rest) -> Success(fn(value), rest) } }
 fun <T, V, W, R> Parser<T, V>.zip(wFn: (V) -> Parser<T, W>, fn: (V, W, T) -> Result<T, R>): Parser<T, R> = compose {
-    it.mapSuccess { v -> wFn(v.value)(v.rest).mapSuccess { (_, value, rest) -> fn(v.value, value, rest) } }
+    it.mapSuccess { v -> wFn(v.value)(v.rest).mapSuccess { (value, rest) -> fn(v.value, value, rest) } }
 }
 
 infix fun <T, V> Parser<T, V>.or(other: Parser<T, V>): Parser<T, V> = Parser({ this(it).mapFailure { _ -> other(it) } })
 infix fun <T, V, W> Parser<T, V>.and(other: Parser<T, W>) = andR(other)
-infix fun <T, V, W> Parser<T, V>.andR(other: Parser<T, W>) = zip({ other }) { _, v, r -> Success("andR", v, r) }
-infix fun <T, V, W> Parser<T, V>.andL(other: Parser<T, W>) = zip({ other }) { v, _, r -> Success("andL", v, r) }
+infix fun <T, V, W> Parser<T, V>.andR(other: Parser<T, W>) = zip({ other }) { _, v, r -> Success(v, r) }
+infix fun <T, V, W> Parser<T, V>.andL(other: Parser<T, W>) = zip({ other }) { v, _, r -> Success(v, r) }
 fun <T, V> Parser<T, V>.wrapError(msg: String) = compose { it.mapFailure { f -> Failure(msg, f, f.rest) } }
 fun <T, V> Parser<T, V>.between(start: Parser<T, *>, end: Parser<T, *> = start) = (start andR this andL end)
-fun <T, V> Parser<T, V>.list() = compose { it.mapSuccess { (_, value, rest) -> Success("list", listOf(value), rest) } }
+fun <T, V> Parser<T, V>.list() = compose { it.mapSuccess { (value, rest) -> Success(listOf(value), rest) } }
 
-fun <T, V> succeed(msg: String, value: V): Parser<T, V> = Parser({ Success(msg, value, it) })
-fun <T, V> empty(): Parser<T, List<V>> = succeed("empty", emptyList())
+fun <T, V> succeed(value: V): Parser<T, V> = Parser({ Success(value, it) })
+fun <T, V> empty(): Parser<T, List<V>> = succeed(emptyList())
 fun <T, V> repeatOrEmpty(parser: Parser<T, V>): Parser<T, List<V>> = repeat(parser) or empty()
-fun <T, V> repeat(parser: Parser<T, V>) = parser.zip({ _ -> repeatOrEmpty(parser) }, { v, l, r -> Success("repeat", arrayListOf(v) + l, r) })
+fun <T, V> repeat(parser: Parser<T, V>) = parser.zip({ _ -> repeatOrEmpty(parser) }, { v, l, r -> Success(arrayListOf(v) + l, r) })
 
 fun <T> Parser<T, Char>.char(ch: Char) = compose { it.filter({ it == ch }) }
 fun <T> Parser<T, Char>.char(regex: Regex) = compose { it.filter({ regex.matches(it.toString()) }) }
@@ -165,18 +165,18 @@ fun <T> Parser<T, Char>.token() = repeat(word()).between(ws())
 fun <T> Parser<T, Char>.prefix(prefix: Char, parser: Parser<T, List<Char>>) = concat(char(prefix), parser) or parser
 
 fun <T> concat(p1: Parser<T, Char>, p2: Parser<T, List<Char>>): Parser<T, List<Char>> {
-    return p1.zip({ p2 }, { v: Char, l: List<Char>, r -> Success("concat", arrayListOf(v) + l, r) })
+    return p1.zip({ p2 }, { v: Char, l: List<Char>, r -> Success(arrayListOf(v) + l, r) })
 }
 
 fun <T> concat(vararg charParsers: Parser<T, Char>): Parser<T, List<Char>> {
-    return charParsers.fold(empty()) { acc, n -> acc.zip({ n }, { xs, x, r -> Success("concat", xs + x, r) }) }
+    return charParsers.fold(empty()) { acc, n -> acc.zip({ n }, { xs, x, r -> Success(xs + x, r) }) }
 }
 
 fun string() = Parser<String, Char> {
     when (it.length) {
         0 -> Failure("EOF", null, "")
-        1 -> Success("DONE", it[0], "")
-        else -> Success("NEXT", it[0], it.substring(1))
+        1 -> Success(it[0], "")
+        else -> Success(it[0], it.substring(1))
     }
 }
 
@@ -203,7 +203,7 @@ sealed class Result<T, V> {
     }
 }
 
-data class Success<T, V>(val msg: String, val value: V, val rest: T) : Result<T, V>()
+data class Success<T, V>(val value: V, val rest: T) : Result<T, V>()
 data class Failure<T, V>(val msg: String, val child: Failure<T, *>?, val rest: T) : Result<T, V>()
 
 @Suppress("UNCHECKED_CAST")
