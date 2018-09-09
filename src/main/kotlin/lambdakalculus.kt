@@ -59,19 +59,19 @@ fun eval(term: Expr, debug: Boolean = false): Expr {
         is Apply -> false
     }
 
-    fun evalStep(term: Expr): Expr = when {
+    fun evalStep(term: Expr): Expr? = when {
         term is Apply && term.fn is Lambda && term.arg.isValue() -> substitution(term.fn.arg, term.arg)(term.fn.body)
-        term is Apply && term.fn.isValue() -> Apply(term.fn, evalStep(term.arg))
-        term is Apply -> Apply(evalStep(term.fn), term.arg)
-        else -> throw NoWhenBranchMatchedException("non evaluable")
+        term is Apply && term.fn.isValue() -> evalStep(term.arg)?.let { Apply(term.fn, it) }
+        term is Apply -> evalStep(term.fn)?.let { Apply(it, term.arg) }
+        else -> null
     }
 
-    fun apply(term: Expr): Expr = try {
-        val step = evalStep(term)
-        if (debug) println("step: ${term.pretty()}  → ${step.pretty()}")
-        apply(step)
-    } catch (e: NoWhenBranchMatchedException) {
-        term;
+    tailrec fun apply(term: Expr): Expr {
+        val evalStep = evalStep(term)
+        return if (evalStep == null) term else {
+            if (debug) println("step: ${term.pretty()}  → ${evalStep.pretty()}")
+            apply(evalStep)
+        }
     }
     return apply(term)
 }
@@ -143,7 +143,7 @@ fun <T, V, W, R> Parser<T, V>.zip(wFn: (V) -> Parser<T, W>, fn: (V, W, T) -> Res
     it.mapSuccess { v -> wFn(v.value)(v.rest).mapSuccess { (value, rest) -> fn(v.value, value, rest) } }
 }
 
-infix fun <T, V> Parser<T, V>.or(other: Parser<T, V>): Parser<T, V> = Parser({ this(it).mapFailure { _ -> other(it) } })
+infix fun <T, V> Parser<T, V>.or(other: Parser<T, V>): Parser<T, V> = Parser { this(it).mapFailure { _ -> other(it) } }
 infix fun <T, V, W> Parser<T, V>.and(other: Parser<T, W>) = andR(other)
 infix fun <T, V, W> Parser<T, V>.andR(other: Parser<T, W>) = zip({ other }) { _, v, r -> Success(v, r) }
 infix fun <T, V, W> Parser<T, V>.andL(other: Parser<T, W>) = zip({ other }) { v, _, r -> Success(v, r) }
@@ -151,26 +151,24 @@ fun <T, V> Parser<T, V>.wrapError(msg: String) = compose { it.mapFailure { f -> 
 fun <T, V> Parser<T, V>.between(start: Parser<T, *>, end: Parser<T, *> = start) = (start andR this andL end)
 fun <T, V> Parser<T, V>.list() = compose { it.mapSuccess { (value, rest) -> Success(listOf(value), rest) } }
 
-fun <T, V> succeed(value: V): Parser<T, V> = Parser({ Success(value, it) })
+fun <T, V> succeed(value: V): Parser<T, V> = Parser { Success(value, it) }
 fun <T, V> empty(): Parser<T, List<V>> = succeed(emptyList())
 fun <T, V> repeatOrEmpty(parser: Parser<T, V>): Parser<T, List<V>> = repeat(parser) or empty()
 fun <T, V> repeat(parser: Parser<T, V>) = parser.zip({ _ -> repeatOrEmpty(parser) }, { v, l, r -> Success(arrayListOf(v) + l, r) })
 
-fun <T> Parser<T, Char>.char(ch: Char) = compose { it.filter({ it == ch }) }
-fun <T> Parser<T, Char>.char(regex: Regex) = compose { it.filter({ regex.matches(it.toString()) }) }
+fun <T> Parser<T, Char>.char(ch: Char) = compose { it.filter { c -> c == ch } }
+fun <T> Parser<T, Char>.char(regex: Regex) = compose { it.filter { c -> regex.matches(c.toString()) } }
 fun <T> Parser<T, Char>.char(test: (Char) -> Boolean) = compose { it.filter(test) }
 fun <T> Parser<T, Char>.ws() = repeat(char(Regex("""\s""")))
 fun <T> Parser<T, Char>.word() = char(Regex("""\w"""))
 fun <T> Parser<T, Char>.token() = repeat(word()).between(ws())
 fun <T> Parser<T, Char>.prefix(prefix: Char, parser: Parser<T, List<Char>>) = concat(char(prefix), parser) or parser
 
-fun <T> concat(p1: Parser<T, Char>, p2: Parser<T, List<Char>>): Parser<T, List<Char>> {
-    return p1.zip({ p2 }, { v: Char, l: List<Char>, r -> Success(arrayListOf(v) + l, r) })
-}
+fun <T> concat(p1: Parser<T, Char>, p2: Parser<T, List<Char>>): Parser<T, List<Char>> =
+        p1.zip({ p2 }, { v: Char, l: List<Char>, r -> Success(arrayListOf(v) + l, r) })
 
-fun <T> concat(vararg charParsers: Parser<T, Char>): Parser<T, List<Char>> {
-    return charParsers.fold(empty()) { acc, n -> acc.zip({ n }, { xs, x, r -> Success(xs + x, r) }) }
-}
+fun <T> concat(vararg charParsers: Parser<T, Char>): Parser<T, List<Char>> =
+        charParsers.fold(empty()) { acc, n -> acc.zip({ n }, { xs, x, r -> Success(xs + x, r) }) }
 
 fun string() = Parser<String, Char> {
     when (it.length) {
